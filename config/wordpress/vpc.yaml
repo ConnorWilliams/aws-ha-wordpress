@@ -1,0 +1,32 @@
+template_path: templates/vpc.py
+sceptre_user_data:
+  environment: wordpress
+  subnetfile: subnets.csv
+  numAz: 3 # The number of AZs being used
+  subnets:
+    - tier: publicInfra
+      az1: 10.1.11.0
+      az2: 10.1.12.0
+      az3: 10.1.13.0
+      suffix: /24
+      useNat: 0
+      useIgw: 1
+    - tier: privateWeb
+      az1: 10.1.21.0
+      az2: 10.1.22.0
+      az3: 10.1.23.0
+      suffix: /24
+      useNat: 1
+      useIgw: 0
+    - tier: privateData
+      az1: 10.1.31.0
+      az2: 10.1.32.0
+      az3: 10.1.33.0
+      suffix: /24
+      useNat: 0
+      useIgw: 0
+
+parameters:
+  vpcCidr: 10.1.0.0/16
+  ownerName: connor
+  ownerEmail: connor.williams@cloudreach.com
