@@ -1,0 +1,27 @@
+template_path: templates/server.py
+sceptre_user_data:
+  environment: wordpress
+  subnets:
+    publicInfraAZ1Id: !stack_output vpc::publicInfraAZ1Id
+    publicInfraAZ2Id: !stack_output vpc::publicInfraAZ2Id
+    publicInfraAZ3Id: !stack_output vpc::publicInfraAZ3Id
+    privateWebAZ1Id: !stack_output vpc::privateWebAZ1Id
+    privateWebAZ2Id: !stack_output vpc::privateWebAZ2Id
+    privateWebAZ3Id: !stack_output vpc::privateWebAZ3Id
+    privateDataAZ1Id: !stack_output vpc::privateDataAZ1Id
+    privateDataAZ2Id: !stack_output vpc::privateDataAZ2Id
+    privateDataAZ3Id: !stack_output vpc::privateDataAZ3Id
+
+parameters:
+  vpcId: !stack_output vpc::vpcId
+  vpcCidr: !stack_output vpc::vpcCidr
+  keyPair: connorwilliams
+  dbMultiAz: true
+  dbName: wordpres-db
+  dbUser: admin
+  dbPassword: changeme
+  dbStorage: 5
+
+  # Default Tags
+  ownerName: !stack_output vpc::ownerNameOutput
+  ownerEmail: !stack_output vpc::ownerEmailOutput

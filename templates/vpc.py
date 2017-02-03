@@ -201,15 +201,27 @@ class Vpc(object):
         t = self.template
 
         self.vpcIdOutput = t.add_output(Output(
-            'VpcId',
+            'vpcId',
             Value=Ref(self.vpc),
             Description='VPC Id'
         ))
 
         self.vpcCidrOutput = t.add_output(Output(
-            'VpcCidr',
+            'vpcCidr',
             Value=Ref(self.vpcCidrParam),
             Description='VPC CIDR range'
+        ))
+
+        self.ownerNameOutput = t.add_parameter(Parameter(
+            'ownerName',
+            Value=Ref(self.ownerNameParam),
+            Description='Name of owner of resources'
+        ))
+
+        self.ownerEmailOutput = t.add_parameter(Parameter(
+            'ownerEmail',
+            Value=Ref(self.ownerEmailParam),
+            Description='Email of owner of resources'
         ))
 
         # Adds subnet IDs to output
@@ -218,7 +230,7 @@ class Vpc(object):
                 azNum = str(i+1)
                 subnetName=subnetDict['tier']+'AZ'+azNum
                 output = t.add_output(Output(
-                    subnetName,
+                    subnetName+'Id',
                     Value=subnetDict['ID'+azNum],
                     Description=subnetName
                 ))

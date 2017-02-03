@@ -1,7 +1,6 @@
 template_path: templates/vpc.py
 sceptre_user_data:
   environment: wordpress
-  subnetfile: subnets.csv
   numAz: 3 # The number of AZs being used
   subnets:
     - tier: publicInfra

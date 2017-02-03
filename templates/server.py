@@ -6,6 +6,7 @@
 from troposphere import Output, Parameter, Ref, Template, Join
 from troposphere import GetAZs, Select, Join, GetAtt
 import troposphere.ec2 as ec2
+import troposphere.elasticloadbalancing as elb
 
 class Wordpress(object):
     def __init__(self, sceptre_user_data):
@@ -13,7 +14,6 @@ class Wordpress(object):
         self.template.add_description("VPC Stack")
         self.sceptreUserData = sceptre_user_data
         self.environment = self.sceptreUserData['environment']
-        self.numAz = self.sceptreUserData['numAz']
 
         self.add_parameters()
 
@@ -25,23 +25,47 @@ class Wordpress(object):
             self.sceptreUserData['environment']
         ])
 
-        self.add_elb()
-        self.add_autoscaling_group()
-        self.add_rds()
+        print sceptre_user_data
 
-        self.add_outputs()
+        self.add_elb()
+        # self.add_rds()
+        # self.add_autoscaling_group()
+        #
+        # self.add_outputs()
 
     def add_parameters(self):
         t = self.template
 
+        self.vpcIdParam = t.add_parameter(Parameter(
+            "vpcId",
+            Type="String",
+            Description="The VPC ID.",
+        ))
+
+        self.vpcCidrParam = t.add_parameter(Parameter(
+            "vpcCidr",
+            Type="String",
+            Description="The VPC CIDR.",
+        ))
+
         self.keyPairParam = t.add_parameter(Parameter(
-            "KeyPair",
+            "keyPair",
             Type="AWS::EC2::KeyPair::KeyName",
             Description="Name of an existing EC2 KeyPair to enable SSH access to the instances.",
         ))
 
+        self.ownerNameParam = t.add_parameter(Parameter(
+            'ownerName',
+            Type='String'
+        ))
+
+        self.ownerEmailParam = t.add_parameter(Parameter(
+            'ownerEmail',
+            Type='String'
+        ))
+
         self.dbMultiAzParam = t.add_parameter(Parameter(
-            "DbMultiAz",
+            "dbMultiAz",
             Default='false',
             Type="String",
             Description="The WordPress database admin account password",
@@ -50,7 +74,7 @@ class Wordpress(object):
         ))
 
         self.dbNameParam = t.add_parameter(Parameter(
-            "DbName",
+            "dbName",
             Type="String",
             Default="wordpressdb",
             Description="The WordPress database name",
@@ -61,7 +85,7 @@ class Wordpress(object):
         ))
 
         self.dbUserParam = t.add_parameter(Parameter(
-            "DbUser",
+            "dbUser",
             Type="String",
             Description="The WordPress database admin account username",
             MinLength=1,
@@ -71,7 +95,7 @@ class Wordpress(object):
         ))
 
         self.dbPasswordParam = t.add_parameter(Parameter(
-            "DbPassword",
+            "dbPassword",
             NoEcho=True,
             Type="String",
             Description="The WordPress database admin account password",
@@ -81,102 +105,84 @@ class Wordpress(object):
         ))
 
         self.dbStorageParam = t.add_parameter(Parameter(
-            "DbStorage",
+            "dbStorage",
             NoEcho=True,
             Type="Number",
             Description="The size of the WordPress database in Gb.",
-            Default=5,
-            MinValue=5,
-            MaxValue=1024
+            Default='5',
+            MinValue='5',
+            MaxValue='1024'
         ))
 
     def add_elb(self):
-        # ELB
+        t = self.template
+
+        self.elbSg = t.add_resource(ec2.SecurityGroup(
+            'ElbSecurityGroup',
+            VpcId=Ref(self.vpcIdParam),
+            GroupDescription='Security group for ELB.',
+            SecurityGroupIngress=[
+                ec2.SecurityGroupRule(
+                    ToPort='80',
+                    FromPort='80',
+                    IpProtocol='tcp',
+                    CidrIp="0.0.0.0/0"
+                )
+                #TODO HTTPS
+            ],
+            Tags=self.defaultTags + [
+                ec2.Tag('Name', Join("", [
+                    self.namePrefix,
+                    'ElbSecurityGroup'
+                ]))
+            ]
+        ))
+
+        self.elbListener = elb.Listener(
+            'ElbListener',
+            LoadBalancerPort="80",
+            InstancePort="80",
+            Protocol="HTTP",
+            InstanceProtocol="HTTP"
+        )
+
+        self.elbHealthCheck = elb.HealthCheck(
+            Target="TCP:80",
+            Timeout="2",
+            Interval="5",
+            HealthyThreshold="2",
+            UnhealthyThreshold="2"
+        )
+
+        publicSubnetIds = [ self.sceptreUserData['subnets']['publicInfraAZ1Id'],
+                            self.sceptreUserData['subnets']['publicInfraAZ2Id'],
+                            self.sceptreUserData['subnets']['publicInfraAZ3Id']
+        ]
+
+        self.elb = t.add_resource(elb.LoadBalancer(
+            'Elb',
+            Listeners=[self.elbListener],
+            Scheme='internet-facing',
+            HealthCheck=self.elbHealthCheck,
+            CrossZone=True,
+            Subnets=publicSubnetIds,
+            SecurityGroups=[Ref(self.elbSg)],
+            Tags=self.defaultTags + [
+                ec2.Tag('Name', Join("", [
+                    self.namePrefix,
+                    'Elb'
+                ]))
+            ]
+        ))
+        return 0
+
+    def add_rds(self):
+
         return 0
 
     def add_autoscaling_group(self):
         t = self.template
 
-        self.serverSg = t.add_resource(ec2.SecurityGroup(
-            "WordpressServerSecurityGroup",
-            VpcId=Ref(self.vpc_id_param),
-            SecurityGroupIngress=[
-                {"ToPort": "443", "IpProtocol": "tcp", "CidrIp": "0.0.0.0/0", "FromPort": "443"},
-                {"ToPort": "943", "IpProtocol": "tcp", "CidrIp": "0.0.0.0/0", "FromPort": "943"},
-                {"ToPort": "1194", "IpProtocol": "udp", "CidrIp": "0.0.0.0/0", "FromPort": "1194"},
-                {"ToPort": "22", "IpProtocol": "tcp", "CidrIp": "0.0.0.0/0", "FromPort": "22"}],
-            GroupDescription="Controls access to the OpenVPN server",
-            Tags=self.DEFAULT_TAGS + [
-               ec2.Tag("Name", "OpenVPNSecurityGroup")
-            ]
-        ))
-
-        self.serverLaunchConfig = t.add_resource(LaunchConfiguration(
-            "LaunchConfiguration",
-            Metadata=autoscaling.Metadata(
-                cloudformation.Init({
-                    "config": cloudformation.InitConfig(
-                        files=cloudformation.InitFiles({
-                            "/etc/rsyslog.d/20-somethin.conf": cloudformation.InitFile(
-                                source=Join('', [
-                                    "http://",
-                                    Ref(DeployBucket),
-                                    ".s3.amazonaws.com/stacks/",
-                                    Ref(RootStackName),
-                                    "/env/etc/rsyslog.d/20-somethin.conf"
-                                ]),
-                                mode="000644",
-                                owner="root",
-                                group="root",
-                                authentication="DeployUserAuth"
-                            )
-                        }),
-                        services={
-                            "sysvinit": cloudformation.InitServices({
-                                "rsyslog": cloudformation.InitService(
-                                    enabled=True,
-                                    ensureRunning=True,
-                                    files=['/etc/rsyslog.d/20-somethin.conf']
-                                )
-                            })
-                        }
-                    )
-                }),
-                cloudformation.Authentication({
-                    "DeployUserAuth": cloudformation.AuthenticationBlock(
-                        type="S3",
-                        accessKeyId=Ref(DeployUserAccessKey),
-                        secretKey=Ref(DeployUserSecretKey)
-                    )
-                })
-            ),
-            UserData=Base64(Join('', [
-                "#!/bin/bash\n",
-                "cfn-signal -e 0",
-                "    --resource AutoscalingGroup",
-                "    --stack ", Ref("AWS::StackName"),
-                "    --region ", Ref("AWS::Region"), "\n"
-            ])),
-            ImageId=Ref(AmiId),
-            KeyName=Ref(KeyName),
-            BlockDeviceMappings=[
-                ec2.BlockDeviceMapping(
-                    DeviceName="/dev/sda1",
-                    Ebs=ec2.EBSBlockDevice(
-                        VolumeSize="8"
-                    )
-                ),
-            ],
-            SecurityGroups=[self.serverSg],
-            InstanceType="t2.micro", #TODO Parameterize
-        ))
-
-        # AS Group
-        return 0
-
-    def add_rds(self):
-        # RDS Instance
-        # RDS Security Group
         return 0
 
     def add_outputs(self):
@@ -186,12 +192,12 @@ class Wordpress(object):
 
 
 def sceptre_handler(sceptre_user_data):
-    server = Vpc(sceptre_user_data)
-    return vpc.template.to_json()
+    server = Wordpress(sceptre_user_data)
+    return server.template.to_json()
 
 if __name__ == '__main__':
     # for debugging
     import sys
     print('python version: ', sys.version, '\n')
-    vpc = Vpc()
-    print(vpc.template.to_json())
+    server = Wordpress()
+    print(server.template.to_json())
