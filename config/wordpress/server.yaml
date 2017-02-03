@@ -2,6 +2,7 @@ template_path: templates/server.py
 sceptre_user_data:
   environment: wordpress
   subnets:
+    # If used here and not parameters then we get a nice dict
     publicInfraAZ1Id: !stack_output vpc::publicInfraAZ1Id
     publicInfraAZ2Id: !stack_output vpc::publicInfraAZ2Id
     publicInfraAZ3Id: !stack_output vpc::publicInfraAZ3Id

@@ -7,6 +7,7 @@ from troposphere import Output, Parameter, Ref, Template, Join
 from troposphere import GetAZs, Select, Join, GetAtt
 import troposphere.ec2 as ec2
 import troposphere.elasticloadbalancing as elb
+import troposphere.rds as rds
 
 class Wordpress(object):
     def __init__(self, sceptre_user_data):
@@ -28,6 +29,7 @@ class Wordpress(object):
         print sceptre_user_data
 
         self.add_elb()
+        self.add_security_groups()
         # self.add_rds()
         # self.add_autoscaling_group()
         #
@@ -176,8 +178,81 @@ class Wordpress(object):
         ))
         return 0
 
-    def add_rds(self):
 
+    def add_security_groups(self):
+        t = self.template
+
+        self.asgSg = t.add_resource(ec2.SecurityGroup(
+            'AsgSg',
+            VpcId=Ref(self.vpcIdParam),
+            GroupDescription='Security group for ASG.',
+            SecurityGroupIngress=[
+                ec2.SecurityGroupRule(
+                    ToPort='80',
+                    FromPort='80',
+                    IpProtocol='tcp',
+                    SourceSecurityGroupId=Ref(self.elbSg)
+                )
+                #TODO HTTPS
+            ],
+            Tags=self.defaultTags + [
+                ec2.Tag('Name', Join("", [
+                    self.namePrefix,
+                    'AsgSg'
+                ]))
+            ]
+        ))
+
+        self.rdsSg = t.add_resource(ec2.SecurityGroup(
+            'RdsSg',
+            VpcId=Ref(self.vpcIdParam),
+            GroupDescription='Security group for RDS.',
+            SecurityGroupIngress=[
+                ec2.SecurityGroupRule(
+                    ToPort='3306',
+                    FromPort='3306',
+                    IpProtocol='tcp',
+                    SourceSecurityGroupId=Ref(self.asgSg)
+                )
+            ],
+            Tags=self.defaultTags + [
+                ec2.Tag('Name', Join("", [
+                    self.namePrefix,
+                    'RdsSg'
+                ]))
+            ]
+        ))
+        return 0
+
+
+    def add_rds(self):
+        t = self.template
+
+        dbSubnetIds = [ self.sceptreUserData['subnets']['privateDataAZ1Id'],
+                        self.sceptreUserData['subnets']['privateDataAZ2Id'],
+                        self.sceptreUserData['subnets']['privateDataAZ3Id']
+        ]
+
+        self.rdsSubnetGroup = t.add_resource(rds.DBSubnetGroup(
+            'DbSubnetGroup',
+            DBSubnetGroupDescription='Subnet group for RDS.',
+            SubnetIds=dbSubnetIds,
+            Tags=defaultTags
+        ))
+
+        self.rds = t.add_resource(rds.DBInstance(
+            'RdsInstance',
+            AllocatedStorage=Ref(self.dbStorageParam),
+            DBInstanceClass='db.t2.micro',
+            DBName=Ref(self.dbNameParam),
+            DBSubnetGroupName=Ref(self.rdsSubnetGroup),
+            VPCSecurityGroups=[Ref(self.rdsSg)],
+            Engine='MySQL',
+            EngineVersion='5.5.46',
+            MasterUsername=Ref(self.dbUserParam),
+            MasterUserPassword=Ref(self.dbPasswordParam),
+            MultiAZ=True
+        ))
         return 0
 
     def add_autoscaling_group(self):
