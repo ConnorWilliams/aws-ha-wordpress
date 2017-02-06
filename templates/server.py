@@ -3,11 +3,15 @@
 # servers. It also creates an RDS instance for the wordpress database.
 # Template is modified for Sceptre (http://sceptre.ce-tools.cloudreach.com).
 
-from troposphere import Output, Parameter, Ref, Template, Join
+from troposphere import Output, Parameter, Ref, Template, Join, Base64
 from troposphere import GetAZs, Select, Join, GetAtt
-import troposphere.ec2 as ec2
-import troposphere.elasticloadbalancing as elb
-import troposphere.rds as rds
+from troposphere.ec2 import Tag, SecurityGroup, SecurityGroupRule
+from troposphere.elasticloadbalancing import LoadBalancer, Listener, HealthCheck
+from troposphere.rds import DBSubnetGroup, DBInstance
+from troposphere.autoscaling import AutoScalingGroup, LaunchConfiguration
+from troposphere.policies import UpdatePolicy, AutoScalingRollingUpdate
+from troposphere.autoscaling import Tag as ASTag
+from troposphere import cloudformation as cfn
 
 class Wordpress(object):
     def __init__(self, sceptre_user_data):
@@ -19,21 +23,19 @@ class Wordpress(object):
         self.add_parameters()
 
         self.defaultTags = [
-            ec2.Tag('Contact', Ref(self.ownerEmailParam))
+            Tag('Contact', Ref(self.ownerEmailParam))
         ]
         self.namePrefix = Join("", [
             Ref(self.ownerNameParam),
             self.sceptreUserData['environment']
         ])
 
-        print sceptre_user_data
-
         self.add_elb()
         self.add_security_groups()
-        # self.add_rds()
-        # self.add_autoscaling_group()
-        #
-        # self.add_outputs()
+        self.add_rds()
+        self.add_autoscaling_group()
+
+        self.add_outputs()
 
     def add_parameters(self):
         t = self.template
@@ -42,12 +44,6 @@ class Wordpress(object):
             "vpcId",
             Type="String",
             Description="The VPC ID.",
-        ))
-
-        self.vpcCidrParam = t.add_parameter(Parameter(
-            "vpcCidr",
-            Type="String",
-            Description="The VPC CIDR.",
         ))
 
         self.keyPairParam = t.add_parameter(Parameter(
@@ -119,12 +115,12 @@ class Wordpress(object):
     def add_elb(self):
         t = self.template
 
-        self.elbSg = t.add_resource(ec2.SecurityGroup(
+        self.elbSg = t.add_resource(SecurityGroup(
             'ElbSecurityGroup',
             VpcId=Ref(self.vpcIdParam),
             GroupDescription='Security group for ELB.',
             SecurityGroupIngress=[
-                ec2.SecurityGroupRule(
+                SecurityGroupRule(
                     ToPort='80',
                     FromPort='80',
                     IpProtocol='tcp',
@@ -133,14 +129,14 @@ class Wordpress(object):
                 #TODO HTTPS
             ],
             Tags=self.defaultTags + [
-                ec2.Tag('Name', Join("", [
+                Tag('Name', Join("", [
                     self.namePrefix,
                     'ElbSecurityGroup'
                 ]))
             ]
         ))
 
-        self.elbListener = elb.Listener(
+        self.elbListener = Listener(
             'ElbListener',
             LoadBalancerPort="80",
             InstancePort="80",
@@ -148,7 +144,7 @@ class Wordpress(object):
             InstanceProtocol="HTTP"
         )
 
-        self.elbHealthCheck = elb.HealthCheck(
+        self.elbHealthCheck = HealthCheck(
             Target="TCP:80",
             Timeout="2",
             Interval="5",
@@ -161,7 +157,7 @@ class Wordpress(object):
                             self.sceptreUserData['subnets']['publicInfraAZ3Id']
         ]
 
-        self.elb = t.add_resource(elb.LoadBalancer(
+        self.elb = t.add_resource(LoadBalancer(
             'Elb',
             Listeners=[self.elbListener],
             Scheme='internet-facing',
@@ -170,7 +166,7 @@ class Wordpress(object):
             Subnets=publicSubnetIds,
             SecurityGroups=[Ref(self.elbSg)],
             Tags=self.defaultTags + [
-                ec2.Tag('Name', Join("", [
+                Tag('Name', Join("", [
                     self.namePrefix,
                     'Elb'
                 ]))
@@ -182,12 +178,12 @@ class Wordpress(object):
     def add_security_groups(self):
         t = self.template
 
-        self.asgSg = t.add_resource(ec2.SecurityGroup(
+        self.asgSg = t.add_resource(SecurityGroup(
             'AsgSg',
             VpcId=Ref(self.vpcIdParam),
             GroupDescription='Security group for ASG.',
             SecurityGroupIngress=[
-                ec2.SecurityGroupRule(
+                SecurityGroupRule(
                     ToPort='80',
                     FromPort='80',
                     IpProtocol='tcp',
@@ -196,19 +192,19 @@ class Wordpress(object):
                 #TODO HTTPS
             ],
             Tags=self.defaultTags + [
-                ec2.Tag('Name', Join("", [
+                Tag('Name', Join("", [
                     self.namePrefix,
                     'AsgSg'
                 ]))
             ]
         ))
 
-        self.rdsSg = t.add_resource(ec2.SecurityGroup(
+        self.rdsSg = t.add_resource(SecurityGroup(
             'RdsSg',
             VpcId=Ref(self.vpcIdParam),
             GroupDescription='Security group for RDS.',
             SecurityGroupIngress=[
-                ec2.SecurityGroupRule(
+                SecurityGroupRule(
                     ToPort='3306',
                     FromPort='3306',
                     IpProtocol='tcp',
@@ -216,7 +212,7 @@ class Wordpress(object):
                 )
             ],
             Tags=self.defaultTags + [
-                ec2.Tag('Name', Join("", [
+                Tag('Name', Join("", [
                     self.namePrefix,
                     'RdsSg'
                 ]))
@@ -233,14 +229,19 @@ class Wordpress(object):
                         self.sceptreUserData['subnets']['privateDataAZ3Id']
         ]
 
-        self.rdsSubnetGroup = t.add_resource(rds.DBSubnetGroup(
+        self.rdsSubnetGroup = t.add_resource(DBSubnetGroup(
             'DbSubnetGroup',
             DBSubnetGroupDescription='Subnet group for RDS.',
             SubnetIds=dbSubnetIds,
-            Tags=defaultTags
+            Tags=self.defaultTags + [
+                Tag('Name', Join("", [
+                    self.namePrefix,
+                    'DbSubnetGroup'
+                ]))
+            ]
         ))
 
-        self.rds = t.add_resource(rds.DBInstance(
+        self.rds = t.add_resource(DBInstance(
             'RdsInstance',
             AllocatedStorage=Ref(self.dbStorageParam),
             DBInstanceClass='db.t2.micro',
@@ -251,12 +252,230 @@ class Wordpress(object):
             EngineVersion='5.5.46',
             MasterUsername=Ref(self.dbUserParam),
             MasterUserPassword=Ref(self.dbPasswordParam),
-            MultiAZ=True
+            MultiAZ=Ref(self.dbMultiAzParam)
         ))
         return 0
 
     def add_autoscaling_group(self):
         t = self.template
+
+        self.asgLaunchConfig = t.add_resource(LaunchConfiguration(
+            'ASGLaunchConfig',
+            ImageId='ami-0b33d91d', #TODO Mapping for different regions
+            InstanceMonitoring=False,
+            AssociatePublicIpAddress=False,
+            InstanceType="t2.micro",
+            SecurityGroups=[Ref(self.asgSg)],
+            KeyName=Ref(self.keyPairParam),
+            UserData=Base64(Join("",
+                [
+                    "#!/bin/bash -xe\n",
+                    "yum update -y aws-cfn-bootstrap\n",
+
+                    "/opt/aws/bin/cfn-init -v ",
+                    "         --stack ", { "Ref" : "AWS::StackName" },
+                    "         --resource LaunchConfig ",
+                    "         --configsets wordpress_install ",
+                    "         --region ", { "Ref" : "AWS::Region" }, "\n",
+
+                    "/opt/aws/bin/cfn-signal -e $? ",
+                    "         --stack ", { "Ref" : "AWS::StackName" },
+                    "         --resource WebServerGroup ",
+                    "         --region ", { "Ref" : "AWS::Region" }, "\n"
+                ]
+            )),
+            Metadata=cfn.Metadata(
+                cfn.Init(
+                    cfn.InitConfigSets(
+                        wordpress_install=['install_cfn', 'install_chefdk', "install_chef", "install_wordpress", "run_chef"]
+                    ),
+                    install_cfn=cfn.InitConfig(
+                        files={
+                            "/etc/cfn/cfn-hup.conf": {
+                                "content": { "Fn::Join": [ "", [
+                                    "[main]\n",
+                                    "stack=", { "Ref": "AWS::StackId" }, "\n",
+                                    "region=", { "Ref": "AWS::Region" }, "\n"
+                                ]]},
+                                "mode"  : "000400",
+                                "owner" : "root",
+                                "group" : "root"
+                            },
+                            "/etc/cfn/hooks.d/cfn-auto-reloader.conf": {
+                                "content": { "Fn::Join": [ "", [
+                                    "[cfn-auto-reloader-hook]\n",
+                                    "triggers=post.update\n",
+                                    "path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init\n",
+                                    "action=/opt/aws/bin/cfn-init -v ",
+                                    "         --stack ", { "Ref" : "AWS::StackName" },
+                                    "         --resource LaunchConfig ",
+                                    "         --configsets wordpress_install ",
+                                    "         --region ", { "Ref" : "AWS::Region" }, "\n"
+                                ]]},
+                                "mode"  : "000400",
+                                "owner" : "root",
+                                "group" : "root"
+                            }
+                        },
+                        services={
+                            "sysvinit" : {
+                                "cfn-hup" : { "enabled" : "true", "ensureRunning" : "true",
+                                "files" : ["/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf"] }
+                            }
+                        }
+                    ),
+                    install_chefdk=cfn.InitConfig(
+                        packages={
+                            "rpm" : {
+                                "chefdk" : "https://opscode-omnibus-packages.s3.amazonaws.com/el/6/x86_64/chefdk-0.2.0-2.el6.x86_64.rpm"
+                            }
+                        }
+                    ),
+                    install_chef=cfn.InitConfig(
+                        sources={
+                            "/var/chef/chef-repo" : "http://github.com/opscode/chef-repo/tarball/master"
+                        },
+                        files={
+                            "/tmp/install.sh" : {
+                                "source" : "https://www.opscode.com/chef/install.sh",
+                                "mode"  : "000400",
+                                "owner" : "root",
+                                "group" : "root"
+                            },
+                            "/var/chef/chef-repo/.chef/knife.rb" : {
+                                "content" : { "Fn::Join": [ "", [
+                                    "cookbook_path [ '/var/chef/chef-repo/cookbooks' ]\n",
+                                    "node_path [ '/var/chef/chef-repo/nodes' ]\n"
+                                ]]},
+                                "mode"  : "000400",
+                                "owner" : "root",
+                                "group" : "root"
+                            },
+                            "/var/chef/chef-repo/.chef/client.rb" : {
+                                "content" : { "Fn::Join": [ "", [
+                                    "cookbook_path [ '/var/chef/chef-repo/cookbooks' ]\n",
+                                    "node_path [ '/var/chef/chef-repo/nodes' ]\n"
+                                ]]},
+                                "mode"  : "000400",
+                                "owner" : "root",
+                                "group" : "root"
+                            }
+                        },
+                        commands={
+                            "01_make_chef_readable" : {
+                                "command" : "chmod +rx /var/chef"
+                            },
+                            "02_install_chef" : {
+                                "command" : "bash /tmp/install.sh",
+                                "cwd"  : "/var/chef"
+                            },
+                            "03_create_node_list" : {
+                                "command" : "chef-client -z -c /var/chef/chef-repo/.chef/client.rb",
+                                "cwd" : "/var/chef/chef-repo",
+                                "env" : { "HOME" : "/var/chef" }
+                            }
+                        }
+                    ),
+                    install_wordpress=cfn.InitConfig(
+                        files={
+                            "/var/chef/chef-repo/.chef/knife.rb" : {
+                                "content" : { "Fn::Join": [ "", [
+                                    "cookbook_path [ '/var/chef/chef-repo/cookbooks/wordpress/berks-cookbooks' ]\n",
+                                    "node_path [ '/var/chef/chef-repo/nodes' ]\n"
+                                ]]},
+                                "mode"  : "000400",
+                                "owner" : "root",
+                                "group" : "root"
+                            },
+                            "/var/chef/chef-repo/.chef/client.rb" : {
+                                "content" : { "Fn::Join": [ "", [
+                                    "cookbook_path [ '/var/chef/chef-repo/cookbooks/wordpress/berks-cookbooks' ]\n",
+                                    "node_path [ '/var/chef/chef-repo/nodes' ]\n"
+                                ]]},
+                                "mode"  : "000400",
+                                "owner" : "root",
+                                "group" : "root"
+                            },
+                            "/var/chef/chef-repo/cookbooks/wordpress/attributes/aws_rds_config.rb" : {
+                                "content": { "Fn::Join": [ "", [
+                                    "normal['wordpress']['db']['pass'] = '", {"Ref" : "DBPassword"}, "'\n",
+                                    "normal['wordpress']['db']['user'] = '", {"Ref" : "DBUser"}, "'\n",
+                                    "normal['wordpress']['db']['host'] = '", {"Fn::GetAtt" : ["DBInstance", "Endpoint.Address"]}, "'\n",
+                                    "normal['wordpress']['db']['name'] = '", {"Ref" : "DBName"}, "'\n"
+                                ]]},
+                                "mode"  : "000400",
+                                "owner" : "root",
+                                "group" : "root"
+                            }
+                        },
+                        commands={
+                            "01_get_cookbook" : {
+                                "command" : "knife cookbook site download wordpress",
+                                "cwd" : "/var/chef/chef-repo",
+                                "env" : { "HOME" : "/var/chef" }
+                            },
+                            "02_unpack_cookbook" : {
+                                "command" : "tar xvfz /var/chef/chef-repo/wordpress*",
+                                "cwd" : "/var/chef/chef-repo/cookbooks"
+                            },
+                            "03_init_berkshelf": {
+                                "command" : "berks init /var/chef/chef-repo/cookbooks/wordpress --skip-vagrant --skip-git",
+                                "cwd" : "/var/chef/chef-repo/cookbooks/wordpress",
+                                "env" : { "HOME" : "/var/chef" }
+                            },
+                            "04_vendorize_berkshelf" : {
+                                "command" : "berks vendor",
+                                "cwd" : "/var/chef/chef-repo/cookbooks/wordpress",
+                                "env" : { "HOME" : "/var/chef" }
+                            },
+                            "05_configure_node_run_list" : {
+                                "command" : "knife node run_list add -z `knife node list -z` recipe[wordpress]",
+                                "cwd" : "/var/chef/chef-repo",
+                                "env" : { "HOME" : "/var/chef" }
+                            }
+                        }
+
+                    ),
+                    run_chef=cfn.InitConfig(
+                        commands={
+                            "01_run_chef_client" : {
+                                "command" : "chef-client -z -c /var/chef/chef-repo/.chef/client.rb",
+                                "cwd" : "/var/chef/chef-repo",
+                                "env" : { "HOME" : "/var/chef" }
+                            }
+                        }
+                    )
+                )
+            )
+        ))
+
+        webserverSubnetIds = [ self.sceptreUserData['subnets']['privateWebAZ1Id'],
+                            self.sceptreUserData['subnets']['privateWebAZ2Id'],
+                            self.sceptreUserData['subnets']['privateWebAZ3Id']
+        ]
+
+        self.webServerASG = t.add_resource(AutoScalingGroup(
+            'WebServerASG',
+            LaunchConfigurationName=Ref(self.asgLaunchConfig),
+            LoadBalancerNames=[Ref(self.elb)],
+            MinSize='1',
+            DesiredCapacity='2',
+            Cooldown='1',
+            MaxSize='5',
+            UpdatePolicy = UpdatePolicy(
+                    AutoScalingRollingUpdate=AutoScalingRollingUpdate(
+                    MinInstancesInService="1"
+                )
+            ),
+            VPCZoneIdentifier=webserverSubnetIds,
+            Tags=[
+                ASTag('Contact', Ref(self.ownerEmailParam), True),
+                ASTag('Name', Join("", [
+                    self.namePrefix,
+                    'ASG'
+                ]), True)
+            ]
+        ))
 
         return 0
 
