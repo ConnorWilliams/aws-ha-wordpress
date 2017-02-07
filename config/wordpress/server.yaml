@@ -1,4 +1,5 @@
 template_path: templates/server.py
+
 sceptre_user_data:
   environment: wordpress
   subnets:
@@ -15,14 +16,15 @@ sceptre_user_data:
 
 parameters:
   vpcId: !stack_output vpc::vpcId
-  vpcCidr: !stack_output vpc::vpcCidr
+  # vpcCidr: !stack_output vpc::vpcCidr
   keyPair: connorwilliams
-  dbMultiAz: true
-  dbName: wordpres-db
+  dbMultiAz: 'true'
+  vpnSgId: !stack_output openvpn::vpnSecurityGroupID
+  dbName: wordpresdb
   dbUser: admin
   dbPassword: changeme
-  dbStorage: 5
+  dbStorage: '5'
 
   # Default Tags
-  ownerName: !stack_output vpc::ownerNameOutput
-  ownerEmail: !stack_output vpc::ownerEmailOutput
+  ownerName: !stack_output vpc::ownerName
+  ownerEmail: !stack_output vpc::ownerEmail

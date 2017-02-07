@@ -1,0 +1,18 @@
+template_path: templates/openvpn.py
+
+sceptre_user_data:
+  environment: wordpress
+  vpnAdminUser: connor
+  vpnAdminPw: changeme
+
+parameters:
+  vpcId:    !stack_output vpc::vpcId
+  vpnSubnetId: !stack_output vpc::publicInfraAZ1Id
+  keyPair: connorwilliams
+  amiId: ami-44aaf953
+  instanceType: t2.micro
+  volumeSize: "20"
+  
+  # Default Tags
+  ownerName: !stack_output vpc::ownerName
+  ownerEmail: !stack_output vpc::ownerEmail

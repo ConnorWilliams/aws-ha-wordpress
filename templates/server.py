@@ -112,6 +112,12 @@ class Wordpress(object):
             MaxValue='1024'
         ))
 
+        self.vpnSgIdParam = t.add_parameter(Parameter(
+            "vpnSgId",
+            Type="String",
+            Description="The ID of the VPN security group."
+        ))
+
     def add_elb(self):
         t = self.template
 
@@ -188,6 +194,12 @@ class Wordpress(object):
                     FromPort='80',
                     IpProtocol='tcp',
                     SourceSecurityGroupId=Ref(self.elbSg)
+                ),
+                SecurityGroupRule(
+                    ToPort='22',
+                    FromPort='22',
+                    IpProtocol='tcp',
+                    SourceSecurityGroupId=Ref(self.vpnSgIdParam)
                 )
                 #TODO HTTPS
             ],
@@ -278,10 +290,10 @@ class Wordpress(object):
                     "         --configsets wordpress_install ",
                     "         --region ", { "Ref" : "AWS::Region" }, "\n",
 
-                    "/opt/aws/bin/cfn-signal -e $? ",
-                    "         --stack ", { "Ref" : "AWS::StackName" },
-                    "         --resource WebServerGroup ",
-                    "         --region ", { "Ref" : "AWS::Region" }, "\n"
+                    # "/opt/aws/bin/cfn-signal -e $? ",
+                    # "         --stack ", { "Ref" : "AWS::StackName" },
+                    # "         --resource WebServerGroup ",
+                    # "         --region ", { "Ref" : "AWS::Region" }, "\n"
                 ]
             )),
             Metadata=cfn.Metadata(
@@ -290,6 +302,12 @@ class Wordpress(object):
                         wordpress_install=['install_cfn', 'install_chefdk', "install_chef", "install_wordpress", "run_chef"]
                     ),
                     install_cfn=cfn.InitConfig(
+                        # Starts cfn-hup daemon which detects changes in metadata
+                        # and runs user-specified actions when a change is detected.
+                        # This allows configuration updates through UpdateStack.
+                        # The cfn-hup.conf file stores the name of the stack and
+                        # the AWS credentials that the cfn-hup daemon targets.
+                        # The cfn-hup daemon parses and loads each file in the /etc/cfn/hooks.d directory.
                         files={
                             "/etc/cfn/cfn-hup.conf": {
                                 "content": { "Fn::Join": [ "", [
@@ -333,15 +351,18 @@ class Wordpress(object):
                     ),
                     install_chef=cfn.InitConfig(
                         sources={
+                            #  Set up a local Chef repository on the instance.
                             "/var/chef/chef-repo" : "http://github.com/opscode/chef-repo/tarball/master"
                         },
                         files={
+                            #  Chef installation file.
                             "/tmp/install.sh" : {
                                 "source" : "https://www.opscode.com/chef/install.sh",
                                 "mode"  : "000400",
                                 "owner" : "root",
                                 "group" : "root"
                             },
+                            # Knife configuration file.
                             "/var/chef/chef-repo/.chef/knife.rb" : {
                                 "content" : { "Fn::Join": [ "", [
                                     "cookbook_path [ '/var/chef/chef-repo/cookbooks' ]\n",
@@ -351,6 +372,7 @@ class Wordpress(object):
                                 "owner" : "root",
                                 "group" : "root"
                             },
+                            # Chef client configuration file.
                             "/var/chef/chef-repo/.chef/client.rb" : {
                                 "content" : { "Fn::Join": [ "", [
                                     "cookbook_path [ '/var/chef/chef-repo/cookbooks' ]\n",
@@ -362,6 +384,10 @@ class Wordpress(object):
                             }
                         },
                         commands={
+                            #  make the /var/chef directory readable, run the
+                            # Chef installation, and then start Chef local mode
+                            # by using the client.rb file that was created.
+                            # The commands are run in alphanumeric order.
                             "01_make_chef_readable" : {
                                 "command" : "chmod +rx /var/chef"
                             },
@@ -377,7 +403,10 @@ class Wordpress(object):
                         }
                     ),
                     install_wordpress=cfn.InitConfig(
+                        # Installs WordPress by using a WordPress cookbook.
                         files={
+                            # knife.rb and client.rb files are overwritten to
+                            # point to the cookbooks that are required to install WordPress.
                             "/var/chef/chef-repo/.chef/knife.rb" : {
                                 "content" : { "Fn::Join": [ "", [
                                     "cookbook_path [ '/var/chef/chef-repo/cookbooks/wordpress/berks-cookbooks' ]\n",
@@ -396,12 +425,13 @@ class Wordpress(object):
                                 "owner" : "root",
                                 "group" : "root"
                             },
+                            #  Specify the Amazon RDS database instance as the WordPress database
                             "/var/chef/chef-repo/cookbooks/wordpress/attributes/aws_rds_config.rb" : {
                                 "content": { "Fn::Join": [ "", [
-                                    "normal['wordpress']['db']['pass'] = '", {"Ref" : "DBPassword"}, "'\n",
-                                    "normal['wordpress']['db']['user'] = '", {"Ref" : "DBUser"}, "'\n",
-                                    "normal['wordpress']['db']['host'] = '", {"Fn::GetAtt" : ["DBInstance", "Endpoint.Address"]}, "'\n",
-                                    "normal['wordpress']['db']['name'] = '", {"Ref" : "DBName"}, "'\n"
+                                    "normal['wordpress']['db']['pass'] = '", Ref(self.dbPasswordParam), "'\n",
+                                    "normal['wordpress']['db']['user'] = '", Ref(self.dbUserParam), "'\n",
+                                    "normal['wordpress']['db']['host'] = '", GetAtt(self.rds, "Endpoint.Address"), "'\n",
+                                    "normal['wordpress']['db']['name'] = '", Ref(self.dbNameParam), "'\n"
                                 ]]},
                                 "mode"  : "000400",
                                 "owner" : "root",
@@ -481,6 +511,12 @@ class Wordpress(object):
 
     def add_outputs(self):
         t = self.template
+
+        self.websiteUrl = t.add_output(Output(
+            'websiteUrl',
+            Value=Join('', ['http://', GetAtt(self.elb, 'DNSName')]),
+            Description='Wordpress website URL.'
+        ))
 
         return 0
 

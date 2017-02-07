@@ -212,13 +212,13 @@ class Vpc(object):
             Description='VPC CIDR range'
         ))
 
-        self.ownerNameOutput = t.add_parameter(Parameter(
+        self.ownerNameOutput = t.add_output(Output(
             'ownerName',
             Value=Ref(self.ownerNameParam),
             Description='Name of owner of resources'
         ))
 
-        self.ownerEmailOutput = t.add_parameter(Parameter(
+        self.ownerEmailOutput = t.add_output(Output(
             'ownerEmail',
             Value=Ref(self.ownerEmailParam),
             Description='Email of owner of resources'
